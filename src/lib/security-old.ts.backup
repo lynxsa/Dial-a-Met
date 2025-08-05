@@ -1,0 +1,407 @@
+// Security utilities and middleware for Dial-a-Met
+
+import { NextRequest, NextResponse } from 'next/server'
+
+// Web Crypto API utilities for Edge Runtime compatibility
+async function createHash(data: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(data))
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+async function createHmac(secret: string, data: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data))
+  const signatureArray = Array.from(new Uint8Array(signature))
+  return signatureArray.map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function generateRandomBytes(length: number): string {
+  const array = new Uint8Array(length)
+  crypto.getRandomValues(array)
+  return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+// Security headers configuration
+export const securityHeaders = {
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'X-XSS-Protection': '1; mode=block',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
+  'Permissions-Policy': 
+    'camera=(), microphone=(), geolocation=(), interest-cohort=()',
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://www.googletagmanager.com https://connect.facebook.net https://snap.licdn.com https://static.hotjar.com https://script.hotjar.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https: http:",
+    "media-src 'self' https:",
+    "connect-src 'self' https://api.dial-a-met.com https://www.google-analytics.com https://analytics.google.com https://region1.google-analytics.com https://stats.g.doubleclick.net https://www.facebook.com https://connect.facebook.net https://api.linkedin.com https://static.hotjar.com https://api.unsplash.com https://images.unsplash.com",
+    "frame-src 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "upgrade-insecure-requests",
+  ].join('; '),
+}
+
+// Rate limiting configuration
+export interface RateLimitConfig {
+  windowMs: number
+  maxRequests: number
+  message?: string
+  skipSuccessfulRequests?: boolean
+  skipFailedRequests?: boolean
+}
+
+// In-memory rate limit store (use Redis in production)
+const rateLimitStore = new Map<string, { count: number; resetTime: number }>()
+
+// Rate limiting middleware
+export function rateLimit(config: RateLimitConfig) {
+  return async (request: NextRequest) => {
+    const identifier = await getClientIdentifier(request)
+    const now = Date.now()
+    
+    // Clean expired entries
+    rateLimitStore.forEach((value, key) => {
+      if (value.resetTime < now) {
+        rateLimitStore.delete(key)
+      }
+    })
+    
+    // Get or create rate limit entry
+    let entry = rateLimitStore.get(identifier)
+    if (!entry || entry.resetTime < now) {
+      entry = { count: 0, resetTime: now + config.windowMs }
+      rateLimitStore.set(identifier, entry)
+    }
+    
+    // Check if limit exceeded
+    if (entry.count >= config.maxRequests) {
+      return NextResponse.json(
+        { error: config.message || 'Too many requests' },
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': Math.ceil((entry.resetTime - now) / 1000).toString(),
+            'X-RateLimit-Limit': config.maxRequests.toString(),
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': entry.resetTime.toString(),
+          }
+        }
+      )
+    }
+    
+    // Increment counter
+    entry.count++
+    
+    return null // Continue to next middleware
+  }
+}
+
+// Get client identifier for rate limiting
+async function getClientIdentifier(request: NextRequest): Promise<string> {
+  // Use IP address as primary identifier
+  const forwarded = request.headers.get('x-forwarded-for')
+  const realIp = request.headers.get('x-real-ip')
+  const ip = forwarded?.split(',')[0] || realIp || 'unknown'
+  
+  // Add user agent for additional fingerprinting
+  const userAgent = request.headers.get('user-agent') || ''
+  
+  const hash = await createHash(`${ip}:${userAgent}`)
+  return hash.substring(0, 16)
+}
+
+// Input validation and sanitization
+export class InputValidator {
+  // Sanitize HTML input
+  static sanitizeHtml(input: string): string {
+    return input
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/\//g, '&#x2F;')
+  }
+  
+  // Validate email format
+  static isValidEmail(email: string): boolean {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    return emailRegex.test(email) && email.length <= 254
+  }
+  
+  // Validate South African phone number
+  static isValidSAPhoneNumber(phone: string): boolean {
+    const saPhoneRegex = /^(\+27|0)[1-9][0-9]{8}$/
+    return saPhoneRegex.test(phone.replace(/\s/g, ''))
+  }
+  
+  // Validate password strength
+  static validatePassword(password: string): { valid: boolean; errors: string[] } {
+    const errors: string[] = []
+    
+    if (password.length < 8) {
+      errors.push('Password must be at least 8 characters long')
+    }
+    
+    if (!/[A-Z]/.test(password)) {
+      errors.push('Password must contain at least one uppercase letter')
+    }
+    
+    if (!/[a-z]/.test(password)) {
+      errors.push('Password must contain at least one lowercase letter')
+    }
+    
+    if (!/[0-9]/.test(password)) {
+      errors.push('Password must contain at least one number')
+    }
+    
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+      errors.push('Password must contain at least one special character')
+    }
+    
+    // Check for common patterns
+    const commonPatterns = [
+      /123456/, /password/i, /qwerty/i, /abc123/i, /admin/i
+    ]
+    
+    if (commonPatterns.some(pattern => pattern.test(password))) {
+      errors.push('Password contains common patterns and is not secure')
+    }
+    
+    return { valid: errors.length === 0, errors }
+  }
+  
+  // Validate file upload
+  static validateFileUpload(file: File, options: {
+    maxSize?: number
+    allowedTypes?: string[]
+    allowedExtensions?: string[]
+  } = {}): { valid: boolean; errors: string[] } {
+    const errors: string[] = []
+    const {
+      maxSize = 5 * 1024 * 1024, // 5MB default
+      allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+      allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.pdf']
+    } = options
+    
+    // Check file size
+    if (file.size > maxSize) {
+      errors.push(`File size must be less than ${Math.round(maxSize / (1024 * 1024))}MB`)
+    }
+    
+    // Check file type
+    if (!allowedTypes.includes(file.type)) {
+      errors.push('File type not allowed')
+    }
+    
+    // Check file extension
+    const extension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'))
+    if (!allowedExtensions.includes(extension)) {
+      errors.push('File extension not allowed')
+    }
+    
+    return { valid: errors.length === 0, errors }
+  }
+  
+  // SQL injection prevention
+  static sanitizeSqlInput(input: string): string {
+    return input.replace(/['";\\-]/g, '')
+  }
+  
+  // XSS prevention for user-generated content
+  static sanitizeUserContent(content: string): string {
+    return content
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+      .replace(/javascript:/gi, '')
+      .replace(/on\w+\s*=/gi, '')
+  }
+}
+
+// CSRF protection
+export class CSRFProtection {
+  private static readonly secret = process.env.CSRF_SECRET || 'fallback-secret-key'
+  
+  static generateToken(sessionId: string): string {
+    const timestamp = Date.now().toString()
+    const data = `${sessionId}:${timestamp}`
+    const signature = crypto
+      .createHmac('sha256', this.secret)
+      .update(data)
+      .digest('hex')
+    
+    return Buffer.from(`${data}:${signature}`).toString('base64')
+  }
+  
+  static validateToken(token: string, sessionId: string): boolean {
+    try {
+      const decoded = Buffer.from(token, 'base64').toString('utf-8')
+      const [receivedSessionId, timestamp, signature] = decoded.split(':')
+      
+      // Check if session ID matches
+      if (receivedSessionId !== sessionId) {
+        return false
+      }
+      
+      // Check if token is not too old (1 hour max)
+      const tokenAge = Date.now() - parseInt(timestamp)
+      if (tokenAge > 3600000) {
+        return false
+      }
+      
+      // Verify signature
+      const data = `${receivedSessionId}:${timestamp}`
+      const expectedSignature = crypto
+        .createHmac('sha256', this.secret)
+        .update(data)
+        .digest('hex')
+      
+      return signature === expectedSignature
+    } catch {
+      return false
+    }
+  }
+}
+
+// API key validation
+export class APIKeyValidator {
+  private static readonly validApiKeys = new Set(
+    process.env.VALID_API_KEYS?.split(',') || []
+  )
+  
+  static validateApiKey(apiKey: string): boolean {
+    return this.validApiKeys.has(apiKey)
+  }
+  
+  static hashApiKey(apiKey: string): string {
+    return crypto.createHash('sha256').update(apiKey).digest('hex')
+  }
+}
+
+// Security audit logging
+export interface SecurityEvent {
+  type: 'authentication' | 'authorization' | 'input_validation' | 'rate_limit' | 'suspicious_activity'
+  severity: 'low' | 'medium' | 'high' | 'critical'
+  userId?: string
+  ip: string
+  userAgent: string
+  details: Record<string, unknown>
+  timestamp: Date
+}
+
+export class SecurityLogger {
+  static log(event: Omit<SecurityEvent, 'timestamp'>) {
+    const logEntry: SecurityEvent = {
+      ...event,
+      timestamp: new Date(),
+    }
+    
+    // In production, send to security monitoring service
+    if (process.env.NODE_ENV === 'production') {
+      // Send to security monitoring service (e.g., Datadog, Splunk)
+      console.log('SECURITY_EVENT:', JSON.stringify(logEntry))
+    } else {
+      console.warn('Security Event:', logEntry)
+    }
+    
+    // Store critical events for investigation
+    if (event.severity === 'critical') {
+      // Store in database or send immediate alert
+      this.sendSecurityAlert(logEntry)
+    }
+  }
+  
+  private static sendSecurityAlert(event: SecurityEvent) {
+    // Implementation for sending security alerts
+    // Could be email, Slack, PagerDuty, etc.
+    console.error('CRITICAL SECURITY EVENT:', event)
+  }
+}
+
+// Secure session management
+export class SessionManager {
+  private static readonly sessionSecret = process.env.SESSION_SECRET || 'fallback-session-secret'
+  
+  static generateSessionId(): string {
+    return crypto.randomBytes(32).toString('hex')
+  }
+  
+  static signSession(sessionId: string, data: Record<string, unknown>): string {
+    const payload = JSON.stringify({ sessionId, data, timestamp: Date.now() })
+    const signature = crypto
+      .createHmac('sha256', this.sessionSecret)
+      .update(payload)
+      .digest('hex')
+    
+    return Buffer.from(`${payload}:${signature}`).toString('base64')
+  }
+  
+  static verifySession(token: string): { sessionId: string; data: Record<string, unknown> } | null {
+    try {
+      const decoded = Buffer.from(token, 'base64').toString('utf-8')
+      const [payload, signature] = decoded.split(':')
+      
+      // Verify signature
+      const expectedSignature = crypto
+        .createHmac('sha256', this.sessionSecret)
+        .update(payload)
+        .digest('hex')
+      
+      if (signature !== expectedSignature) {
+        return null
+      }
+      
+      const sessionData = JSON.parse(payload)
+      
+      // Check if session is not too old
+      const sessionAge = Date.now() - sessionData.timestamp
+      if (sessionAge > 24 * 60 * 60 * 1000) { // 24 hours
+        return null
+      }
+      
+      return {
+        sessionId: sessionData.sessionId,
+        data: sessionData.data,
+      }
+    } catch {
+      return null
+    }
+  }
+}
+
+// Default rate limit configurations for different endpoints
+export const rateLimitConfigs = {
+  auth: {
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    maxRequests: 5,
+    message: 'Too many authentication attempts, please try again later',
+  },
+  api: {
+    windowMs: 60 * 1000, // 1 minute
+    maxRequests: 100,
+    message: 'Too many API requests, please slow down',
+  },
+  upload: {
+    windowMs: 60 * 1000, // 1 minute
+    maxRequests: 10,
+    message: 'Too many upload attempts, please wait',
+  },
+  contact: {
+    windowMs: 60 * 60 * 1000, // 1 hour
+    maxRequests: 3,
+    message: 'Too many contact form submissions, please wait',
+  },
+}

@@ -4,11 +4,16 @@ import { useState } from 'react'
 import { 
   Pickaxe, 
   Star, 
+  Smartphone, 
+  Download, 
   Menu,
+  Bot,
   Eye,
   Lock,
+  ChevronRight,
   Globe,
   Users,
+  TrendingUp,
   Plus,
   Building2,
   UserCheck,
@@ -18,6 +23,8 @@ import {
   CheckCircle
 } from "lucide-react"
 import Link from "next/link"
+import OptimizedImage from "@/components/OptimizedImage"
+import { MINING_IMAGES, getCategoryImage, getConsultantAvatar } from "@/lib/images"
 import { ThemeToggle } from '@/components/ThemeToggle'
 
 // Temporary fallback for theme classes
@@ -175,8 +182,8 @@ export default function EnhancedDialAMetHomePage() {
               <Link href="#categories" className={`${classes.text.secondary} hover:text-blue-600 font-medium transition-colors`}>
                 Mining Categories
               </Link>
-              <Link href="/browse-opportunities" className={`${classes.text.secondary} hover:text-cyan-600 font-medium transition-colors`}>
-                Browse Opportunities
+              <Link href="/browse" className={`${classes.text.secondary} hover:text-cyan-600 font-medium transition-colors`}>
+                Browse Experts
               </Link>
               <Link href="/pricing" className={`${classes.text.secondary} hover:text-blue-600 font-medium transition-colors`}>
                 Pricing
@@ -207,7 +214,7 @@ export default function EnhancedDialAMetHomePage() {
               <Link href="/" className={`block py-2 ${classes.text.secondary} hover:text-blue-600`}>Home</Link>
               <Link href="#how-it-works" className={`block py-2 ${classes.text.secondary} hover:text-cyan-600`}>How It Works</Link>
               <Link href="#categories" className={`block py-2 ${classes.text.secondary} hover:text-blue-600`}>Mining Categories</Link>
-              <Link href="/browse-opportunities" className={`block py-2 ${classes.text.secondary} hover:text-cyan-600`}>Browse Opportunities</Link>
+              <Link href="/browse" className={`block py-2 ${classes.text.secondary} hover:text-cyan-600`}>Browse Experts</Link>
               <Link href="/pricing" className={`block py-2 ${classes.text.secondary} hover:text-blue-600`}>Pricing</Link>
               <div className={`border-t ${classes.border} pt-2 mt-2`}>
                 <Link href="/auth/signin" className={`block py-2 ${classes.text.secondary} hover:text-blue-600`}>Sign In</Link>
@@ -407,7 +414,7 @@ export default function EnhancedDialAMetHomePage() {
                     {category.expertise}
                   </div>
                   
-                  <Link href="/browse-opportunities">
+                  <Link href="/browse">
                     <button className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white py-3 px-4 rounded-lg font-semibold text-sm transition-all transform hover:scale-105 shadow-lg">
                       Find Experts
                     </button>
@@ -523,7 +530,7 @@ export default function EnhancedDialAMetHomePage() {
               <h4 className="text-lg font-semibold mb-4">For Mining Companies</h4>
               <ul className="space-y-2 text-slate-400">
                 <li><Link href="/auth/signup?role=mine" className="hover:text-white transition-colors">Post Projects</Link></li>
-                <li><Link href="/browse-opportunities" className="hover:text-white transition-colors">Find Opportunities</Link></li>
+                <li><Link href="/browse" className="hover:text-white transition-colors">Find Consultants</Link></li>
                 <li><Link href="/pricing" className="hover:text-white transition-colors">Pricing</Link></li>
                 <li><Link href="/case-studies" className="hover:text-white transition-colors">Case Studies</Link></li>
               </ul>

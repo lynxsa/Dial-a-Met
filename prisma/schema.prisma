@@ -1,0 +1,555 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  role          UserRole
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Authentication
+  accounts      Account[]
+  sessions      Session[]
+
+  // Role-specific profiles
+  clientProfile     ClientProfile?
+  consultantProfile ConsultantProfile?
+  trainerProfile    TrainerProfile?
+  adminProfile      AdminProfile?
+
+  // Activities
+  requests          Request[]
+  bids              Bid[]
+  trainingSessions  TrainingSession[]
+  jobApplications   JobApplication[]
+  notifications     Notification[]
+  auditLogs         AuditLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// User Profiles
+model ClientProfile {
+  id              String @id @default(cuid())
+  userId          String @unique
+  companyName     String
+  companySize     String?
+  industryFocus   String[]
+  loyaltyCredits  Int      @default(0)
+  totalSpent      Float    @default(0)
+  preferredRegion String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("client_profiles")
+}
+
+model ConsultantProfile {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  anonymousId         String   @unique // For anonymous bidding
+  yearsExperience     Int
+  specializations     String[]
+  certifications      String[]
+  successRate         Float    @default(0)
+  averageRating       Float    @default(0)
+  totalProjects       Int      @default(0)
+  totalEarnings       Float    @default(0)
+  isVerified          Boolean  @default(false)
+  availabilityStatus  String   @default("AVAILABLE")
+  hourlyRate          Float?
+  bio                 String?
+  portfolioItems      String[] // Anonymized case studies
+  skills              String[]
+  preferredProjectTypes String[]
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("consultant_profiles")
+}
+
+model TrainerProfile {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  organization     String?
+  expertise        String[]
+  certifications   String[]
+  yearsTeaching    Int
+  averageRating    Float    @default(0)
+  totalStudents    Int      @default(0)
+  isVerified       Boolean  @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("trainer_profiles")
+}
+
+model AdminProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  permissions String[]
+  department  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("admin_profiles")
+}
+
+// Core Business Logic
+model Request {
+  id                String            @id @default(cuid())
+  clientId          String
+  title             String
+  description       String            @db.Text
+  problemType       String
+  mineralType       String?
+  geologicalData    Json?
+  budget            Float?
+  timeline          String?
+  confidentiality   ConfidentialityLevel
+  status            RequestStatus     @default(OPEN)
+  broadcastToSocial Boolean           @default(false)
+  socialPlatforms   String[]
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  expiresAt         DateTime?
+
+  client            User              @relation(fields: [clientId], references: [id])
+  attachments       RequestAttachment[]
+  bids              Bid[]
+  shortlist         Shortlist[]
+  selectedBid       Bid?              @relation("SelectedBid", fields: [selectedBidId], references: [id])
+  selectedBidId     String?           @unique
+  project           Project?
+  aiMatches         AIMatch[]
+  bidWars           BidWar[]
+
+  @@map("requests")
+}
+
+model RequestAttachment {
+  id        String @id @default(cuid())
+  requestId String
+  filename  String
+  filepath  String
+  filesize  Int
+  mimetype  String
+  
+  request   Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@map("request_attachments")
+}
+
+model Bid {
+  id              String      @id @default(cuid())
+  requestId       String
+  consultantId    String
+  anonymousId     String      // Consultant's anonymous identifier
+  price           Float
+  currency        String      @default("ZAR")
+  timeline        String
+  description     String      @db.Text
+  valueAdds       String[]
+  skillHighlights String[]
+  caseStudyUrls   String[]    // URLs to anonymized case studies
+  status          BidStatus   @default(ACTIVE)
+  isSelected      Boolean     @default(false)
+  submittedAt     DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  expiresAt       DateTime?
+  position        Int?        // Current position in bid ranking
+  isHot           Boolean     @default(false) // Trending/hot bid
+  responseTime    String?     // Expected response time
+  
+  request         Request     @relation(fields: [requestId], references: [id])
+  consultant      User        @relation(fields: [consultantId], references: [id])
+  selectedRequest Request?    @relation("SelectedBid")
+  project         Project?
+
+  @@unique([requestId, consultantId])
+  @@map("bids")
+}
+
+model Shortlist {
+  id           String   @id @default(cuid())
+  requestId    String
+  consultantId String
+  rank         Int
+  matchScore   Float
+  createdAt    DateTime @default(now())
+
+  request      Request  @relation(fields: [requestId], references: [id])
+
+  @@unique([requestId, consultantId])
+  @@map("shortlists")
+}
+
+model AIMatch {
+  id           String   @id @default(cuid())
+  requestId    String
+  consultantId String
+  matchScore   Float
+  factors      Json     // Detailed matching factors
+  createdAt    DateTime @default(now())
+
+  request      Request  @relation(fields: [requestId], references: [id])
+
+  @@unique([requestId, consultantId])
+  @@map("ai_matches")
+}
+
+// Bid War System for Real-time Bidding
+model BidWar {
+  id          String   @id @default(cuid())
+  requestId   String
+  isActive    Boolean  @default(true)
+  startedAt   DateTime @default(now())
+  endsAt      DateTime
+  maxBids     Int      @default(25)
+  currentBids Int      @default(0)
+  leadingBid  Float?
+  leadingBidder String? // Anonymous ID
+  
+  request     Request  @relation(fields: [requestId], references: [id])
+  events      BidWarEvent[]
+
+  @@map("bid_wars")
+}
+
+model BidWarEvent {
+  id          String      @id @default(cuid())
+  bidWarId    String
+  type        BidWarEventType
+  anonymousId String      // Bidder's anonymous ID
+  amount      Float?
+  position    Int?
+  timestamp   DateTime    @default(now())
+  
+  bidWar      BidWar      @relation(fields: [bidWarId], references: [id])
+
+  @@map("bid_war_events")
+}
+
+model Project {
+  id            String        @id @default(cuid())
+  requestId     String        @unique
+  bidId         String        @unique
+  status        ProjectStatus @default(INITIATED)
+  startDate     DateTime      @default(now())
+  expectedEndDate DateTime?
+  actualEndDate DateTime?
+  totalAmount   Float
+  paidAmount    Float         @default(0)
+  
+  request       Request       @relation(fields: [requestId], references: [id])
+  bid           Bid           @relation(fields: [bidId], references: [id])
+  milestones    Milestone[]
+  deliverables  Deliverable[]
+  communications Communication[]
+  payments      Payment[]
+
+  @@map("projects")
+}
+
+model Milestone {
+  id          String          @id @default(cuid())
+  projectId   String
+  title       String
+  description String?
+  dueDate     DateTime
+  completedAt DateTime?
+  status      MilestoneStatus @default(PENDING)
+  
+  project     Project         @relation(fields: [projectId], references: [id])
+
+  @@map("milestones")
+}
+
+model Deliverable {
+  id          String   @id @default(cuid())
+  projectId   String
+  title       String
+  description String?
+  filepath    String?
+  submittedAt DateTime @default(now())
+  approved    Boolean  @default(false)
+  
+  project     Project  @relation(fields: [projectId], references: [id])
+
+  @@map("deliverables")
+}
+
+model Communication {
+  id        String              @id @default(cuid())
+  projectId String
+  senderId  String
+  message   String              @db.Text
+  type      CommunicationType   @default(MESSAGE)
+  sentAt    DateTime            @default(now())
+  
+  project   Project             @relation(fields: [projectId], references: [id])
+
+  @@map("communications")
+}
+
+// Training System
+model Course {
+  id          String   @id @default(cuid())
+  trainerId   String
+  title       String
+  description String   @db.Text
+  category    String
+  duration    Int      // in minutes
+  price       Float
+  maxStudents Int?
+  skills      String[]
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  sessions    TrainingSession[]
+
+  @@map("courses")
+}
+
+model TrainingSession {
+  id          String           @id @default(cuid())
+  courseId    String
+  studentId   String
+  status      SessionStatus    @default(ENROLLED)
+  progress    Float            @default(0)
+  completedAt DateTime?
+  rating      Int?
+  feedback    String?
+  
+  course      Course           @relation(fields: [courseId], references: [id])
+  student     User             @relation(fields: [studentId], references: [id])
+
+  @@unique([courseId, studentId])
+  @@map("training_sessions")
+}
+
+// Career System
+model JobListing {
+  id            String   @id @default(cuid())
+  title         String
+  description   String   @db.Text
+  company       String
+  location      String
+  jobType       String
+  experience    String
+  skills        String[]
+  salary        String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  expiresAt     DateTime?
+
+  applications  JobApplication[]
+
+  @@map("job_listings")
+}
+
+model JobApplication {
+  id          String              @id @default(cuid())
+  jobId       String
+  applicantId String
+  status      ApplicationStatus   @default(PENDING)
+  coverLetter String?             @db.Text
+  resumeUrl   String?
+  appliedAt   DateTime            @default(now())
+  
+  job         JobListing          @relation(fields: [jobId], references: [id])
+  applicant   User                @relation(fields: [applicantId], references: [id])
+
+  @@unique([jobId, applicantId])
+  @@map("job_applications")
+}
+
+// Payment System
+model Payment {
+  id          String        @id @default(cuid())
+  projectId   String
+  amount      Float
+  currency    String        @default("USD")
+  status      PaymentStatus @default(PENDING)
+  stripeId    String?
+  paidAt      DateTime?
+  createdAt   DateTime      @default(now())
+  
+  project     Project       @relation(fields: [projectId], references: [id])
+
+  @@map("payments")
+}
+
+// System Features
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String           @db.Text
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  
+  user      User             @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String
+  changes   Json?
+  timestamp DateTime @default(now())
+  ipAddress String?
+  
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+// Enums
+enum UserRole {
+  CLIENT
+  CONSULTANT
+  TRAINER
+  JOB_SEEKER
+  ADMIN
+}
+
+enum ConfidentialityLevel {
+  PUBLIC
+  CONFIDENTIAL
+  HIGHLY_CONFIDENTIAL
+}
+
+enum RequestStatus {
+  OPEN
+  SHORTLISTED
+  BIDDING
+  AWARDED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum BidStatus {
+  ACTIVE
+  WITHDRAWN
+  EXPIRED
+  SELECTED
+  REJECTED
+}
+
+enum ProjectStatus {
+  INITIATED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum CommunicationType {
+  MESSAGE
+  FILE
+  VIDEO_CALL
+  SYSTEM
+}
+
+enum SessionStatus {
+  ENROLLED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ApplicationStatus {
+  PENDING
+  REVIEWED
+  SHORTLISTED
+  INTERVIEWED
+  ACCEPTED
+  REJECTED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  BID_RECEIVED
+  BID_SELECTED
+  PROJECT_UPDATE
+  PAYMENT_RECEIVED
+  TRAINING_REMINDER
+  SYSTEM_ALERT
+}
+
+enum BidWarEventType {
+  BID_PLACED
+  BID_UPDATED
+  BID_WITHDRAWN
+  POSITION_CHANGED
+  WAR_STARTED
+  WAR_ENDED
+}
